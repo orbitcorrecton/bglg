@@ -49,28 +49,24 @@ class BackgroundLogo extends St.Widget {
         this._settings = ExtensionUtils.getSettings();
         this._ifaceSettings = new Gio.Settings({
             schema_id: 'org.gnome.desktop.interface',
-        }); 
+        });
+
         this._settings.connect('changed::logo-file',
             this._updateLogo.bind(this));
         this._settings.connect('changed::logo-file-dark',
             this._updateLogo.bind(this));
-        this._settings.connect('changed::logo-size',
-            this._updateScale.bind(this));
-        this._settings.connect('changed::logo-size',
-            this.queue_relayout.bind(this));
+        this._settings.connect('changed::logo-size', () => {
+            this._updateScale();
+            this.queue_relayout();
+        });
         this._settings.connect('changed::logo-position',
             this._updatePosition.bind(this));
-        this._settings.connect('changed::x-logo-border',
-            this._updateBorder.bind(this));
-        this._settings.connect('changed::y-logo-border',
+        this._settings.connect('changed::logo-border',
             this._updateBorder.bind(this));
         this._settings.connect('changed::logo-opacity',
             this._updateOpacity.bind(this));
         this._settings.connect('changed::logo-always-visible',
             this._updateVisibility.bind(this));
-        this._settings.connect('changed::overview-visible', () => {
-            this._settings.get_boolean('overview-visible');
-        });
 
         this._textureCache = St.TextureCache.get_default();
         this._textureCache.connect('texture-file-changed', (cache, file) => {
@@ -94,17 +90,7 @@ class BackgroundLogo extends St.Widget {
             this._updateOpacity.bind(this));
 
         this._bin = new IconContainer({ x_expand: true, y_expand: true });
-        if (this._settings.get_boolean('overview-visible')) {
-            this.add_actor(this._bin);
-        }
-        else {
         this.add_actor(this._bin);
-        if (Main.overview.visible)
-           this._bin.visible = false;
-        this._hiddenSignal = Main.overview.connect('hidden', () => {
-            this._bin.visible = true;
-            });
-        }
         this._bin.connect('resource-scale-changed',
             this._updateLogoTexture.bind(this));
 
@@ -137,12 +123,12 @@ class BackgroundLogo extends St.Widget {
             this._settings.get_uint('logo-opacity') * brightness;
     }
 
-    _getWorkArea() {
-        return Main.layoutManager.getWorkAreaForMonitor(this._monitorIndex);
+    _getMonitorArea() {
+        return Main.layoutManager.monitors[this._monitorIndex];
     }
 
     _getWidthForRelativeSize(size) {
-        let { width } = this._getWorkArea();
+        let { width } = this._getMonitorArea();
         return width * size / 100;
     }
 
@@ -150,7 +136,7 @@ class BackgroundLogo extends St.Widget {
         if (!this.has_allocation())
             return 1;
 
-        let { width } = this._getWorkArea();
+        let { width } = this._getMonitorArea();
         return this.allocation.get_width() / width;
     }
 
@@ -203,15 +189,13 @@ class BackgroundLogo extends St.Widget {
     }
 
     _updateBorder() {
-        const xborder =
-            this._getActorScale() * this._settings.get_uint('x-logo-border');
-        const yborder =
-            this._getActorScale() * this._settings.get_uint('y-logo-border');
+        const border =
+            this._getActorScale() * this._settings.get_uint('logo-border');
         this._bin.set({
-            margin_top: yborder,
-            margin_bottom: yborder,
-            margin_left: xborder,
-            margin_right: xborder,
+            margin_top: border,
+            margin_bottom: border,
+            margin_left: border,
+            margin_right: border,
         });
     }
 
@@ -245,7 +229,8 @@ class BackgroundLogo extends St.Widget {
         if (this._laterId)
             return;
 
-        this._laterId = Meta.later_add(Meta.LaterType.BEFORE_REDRAW, () => {
+        const laters = global.compositor.get_laters();
+        this._laterId = laters.add(Meta.LaterType.BEFORE_REDRAW, () => {
             this._updateScale();
             this._updateBorder();
 
@@ -256,17 +241,22 @@ class BackgroundLogo extends St.Widget {
 
     _onDestroy() {
         if (this._laterId)
-            Meta.later_remove(this._laterId);
+            global.compositor.get_laters().remove(this._laterId);
         this._laterId = 0;
+
         this._backgroundActor.layout_manager = null;
+        this._settings.run_dispose();
         this._settings = null;
+
         this._logoFile = null;
     }
 });
 
 
 class Extension {
-    constructor() {        
+    constructor() {
+        this._bgManagerProto = Background.BackgroundManager.prototype;
+        this._createBackgroundOrig = this._bgManagerProto._createBackgroundActor;
     }
 
     _reloadBackgrounds() {
@@ -274,8 +264,6 @@ class Extension {
     }
 
     enable() {
-        this._bgManagerProto = Background.BackgroundManager.prototype;
-        this._createBackgroundOrig = this._bgManagerProto._createBackgroundActor;
         const { _createBackgroundOrig } = this;
         this._bgManagerProto._createBackgroundActor = function () {
             const backgroundActor = _createBackgroundOrig.call(this);
