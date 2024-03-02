@@ -1,11 +1,12 @@
-/* exported init */
-/*
- * Copyright 2014 Red Hat, Inc
+/* extension.js
  *
- * This program is free software; you can redistribute it and/or modify
+ * A part of this js is based on 'panel scroll - sun.wxg@gmail.com' extension.
+ * https://github.com/sunwxg/gnome-shell-extension-panelScroll
+ *
+ * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2, or (at your option)
- * any later version.
+ * the Free Software Foundation, either version 2 of the License, or
+ * (at your option) any later version.
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -13,274 +14,363 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, see <http://www.gnu.org/licenses/>.
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ *
+ *
+ *
+ * SPDX-License-Identifier: GPL-2.0-or-later
  */
-const { Clutter, Gio, GLib, GObject, Meta, St } = imports.gi;
 
-const Background = imports.ui.background;
+/* exported init */
+
+const GETTEXT_DOMAIN = 'logo-activities';
+
+const { Atk, Clutter, GLib, GObject, Meta, Shell, St, Gio } = imports.gi;
+
 const ExtensionUtils = imports.misc.extensionUtils;
+const Me = ExtensionUtils.getCurrentExtension();
 const Main = imports.ui.main;
+const PanelMenu = imports.ui.panelMenu;
+const PopupMenu = imports.ui.popupMenu;
+const WorkspaceSwitcherPopup = imports.ui.workspaceSwitcherPopup;
 
-var IconContainer = GObject.registerClass(
-class IconContainer extends St.Widget {
-    _init(params) {
-        super._init(params);
-    }
+const SCHEMA_NAME = 'org.gnome.shell.extensions.logoactivities';
+const KEY_LABEL = 'label';
+const KEY_POPUP = 'popup';
+const KEY_TEXT = 'text';
+const KEY_ICON = 'icon';
+const KEY_ICONNAME = 'icon-name';
+const KEY_SCROLL = 'scroll';
 
-    vfunc_get_preferred_width(forHeight) {
-        let width = super.vfunc_get_preferred_width(forHeight);
-        return width.map(w => w * this.scale_x);
-    }
+var BUTTON_DND_ACTIVATION_TIMEOUT = 250;
 
-    vfunc_get_preferred_height(forWidth) {
-        let height = super.vfunc_get_preferred_height(forWidth);
-        return height.map(h => h * this.scale_y);
-    }
-});
-
-var BackgroundLogo = GObject.registerClass(
-class BackgroundLogo extends St.Widget {
-    _init(backgroundActor) {
-        this._backgroundActor = backgroundActor;
-        this._monitorIndex = this._backgroundActor.monitor;
-
-        this._logoFile = null;
-
-        this._settings = ExtensionUtils.getSettings();
-        this._ifaceSettings = new Gio.Settings({
-            schema_id: 'org.gnome.desktop.interface',
+const LogoActivitiesIndicator = GObject.registerClass(
+class LogoActivitiesIndicator extends PanelMenu.Button {
+    _init(settings) {
+        super._init(0.0, null, true);
+        this.accessible_role = Atk.Role.TOGGLE_BUTTON;
+        
+        this.name = 'panelActivities';
+        
+        /* Translators: If there is no suitable word for "Activities"
+           in your language, you can use the word for "Overview". */
+        
+        this.settings = settings;
+        
+        this.text_label = settings.get_boolean(KEY_LABEL);
+        this.text_label_ID = settings.connect("changed::" + KEY_LABEL, () => {
+            this.text_label = settings.get_boolean(KEY_LABEL);
+            this._set_label();
         });
-
-        this._settings.connect('changed::logo-file',
-            this._updateLogo.bind(this));
-        this._settings.connect('changed::logo-file-dark',
-            this._updateLogo.bind(this));
-        this._settings.connect('changed::logo-size', () => {
-            this._updateScale();
-            this.queue_relayout();
+        this.activities_icon = settings.get_boolean(KEY_ICON);
+        this.activities_icon_ID = settings.connect("changed::" + KEY_ICON, () => {
+            this.activities_icon = settings.get_boolean(KEY_ICON);
+            this._set_icon();
         });
-        this._settings.connect('changed::logo-position',
-            this._updatePosition.bind(this));
-        this._settings.connect('changed::logo-border',
-            this._updateBorder.bind(this));
-        this._settings.connect('changed::logo-opacity',
-            this._updateOpacity.bind(this));
-        this._settings.connect('changed::logo-always-visible',
-            this._updateVisibility.bind(this));
-
-        this._textureCache = St.TextureCache.get_default();
-        this._textureCache.connect('texture-file-changed', (cache, file) => {
-            if (!this._logoFile || !this._logoFile.equal(file))
-                return;
-            this._updateLogoTexture();
+        this.text = settings.get_string(KEY_TEXT);
+        this.text_ID = settings.connect("changed::" + KEY_TEXT, () => {
+            this.text = settings.get_string(KEY_TEXT);
+            this._set_label();
         });
-
-        super._init({
-            layout_manager: new Clutter.BinLayout(),
-            x_expand: true,
-            y_expand: true,
-            opacity: 0,
+        this.activities_icon_name = settings.get_string(KEY_ICONNAME);
+        this.activities_icon_name_ID = settings.connect("changed::" + KEY_ICONNAME, () => {
+            this.activities_icon_name = settings.get_string(KEY_ICONNAME);
+            this._set_icon();
         });
-        this._backgroundActor.layout_manager = new Clutter.BinLayout();
-        this._backgroundActor.add_child(this);
+        this.desktopscroll = settings.get_boolean(KEY_SCROLL);
+        this.desktopscrollID = settings.connect("changed::" + KEY_SCROLL, () => {
+            this.desktopscroll = settings.get_boolean(KEY_SCROLL);
+        });
+        this.popup = settings.get_boolean(KEY_POPUP);
+        this.popup_ID = settings.connect("changed::" + KEY_POPUP, () => {
+            this.popup = settings.get_boolean(KEY_POPUP);
+        });
+        
+        let bin = new St.Bin();
+        this.add_actor(bin);
+        
+        this._container = new St.BoxLayout({ style_class: 'activities-layout'});
+        bin.set_child(this._container);
+        
+        this._iconBox = new St.Bin({
+            y_align: Clutter.ActorAlign.CENTER,
+        });
+        this._container.add_actor(this._iconBox);       
+        
+        this._label = new St.Label({
+            text: _('Activities'),
+            y_align: Clutter.ActorAlign.CENTER,
+        });
+        this._container.add_actor(this._label);
+        
+        this._set_icon();
+        this._set_label();
 
-        this.connect('destroy', this._onDestroy.bind(this));
+        this.label_actor = this._label;
 
-        this._backgroundActor.content.connect('notify::brightness',
-            this._updateOpacity.bind(this));
+        this._showingSignal = Main.overview.connect('showing', () => {
+            this.add_style_pseudo_class('overview');
+            this.add_accessible_state(Atk.StateType.CHECKED);
+        });
+        this._hidingSignal = Main.overview.connect('hiding', () => {
+            this.remove_style_pseudo_class('overview');
+            this.remove_accessible_state(Atk.StateType.CHECKED);
+        });
+        
+        this.wm = global.workspace_manager;
+        this.scrollEventSignal = this.connect('scroll-event', this._scrollEvent.bind(this));
 
-        this._bin = new IconContainer({ x_expand: true, y_expand: true });
-        this.add_actor(this._bin);
-        this._bin.connect('resource-scale-changed',
-            this._updateLogoTexture.bind(this));
-
-        this._updateLogo();
-        this._updatePosition();
-        this._updateBorder();
-        this._updateOpacity();
-        this._updateVisibility();
+        this._xdndTimeOut = 0;
     }
 
-    _updateLogo() {
-        const colorScheme = this._ifaceSettings.get_string('color-scheme');
-        const fileKey = colorScheme === 'prefer-dark'
-            ? 'logo-file-dark'
-            : 'logo-file';
-        const filename = this._settings.get_string(fileKey);
-        let file = Gio.File.new_for_commandline_arg(filename);
-        if (this._logoFile && this._logoFile.equal(file))
-            return;
-
-        this._logoFile = file;
-
-        this._updateLogoTexture();
+    _set_icon() {     
+     if (this.activities_icon) {
+        const icon = new St.Icon({
+            style_class: 'activities-icon',
+            y_align: Clutter.ActorAlign.CENTER,
+        });
+        this._iconBox.set_child(icon);
+        icon.icon_name = this.activities_icon_name;
+        this._iconBox.visible = true;        
+        if (icon.icon_name === '')
+        this._iconBox.visible = false;
+        }
+        else {
+        this._iconBox.visible = false;
+        }        
+    }
+    
+    _set_label() {    
+        if(this.text_label) {
+        this._label.set_text(this.text);
+        this._label.visible = true;
+        if (this._label === '')
+        this._label.visible = false;
+        }
+        else {
+        this._label.visible = false;
+        }        
     }
 
-    _updateOpacity() {
-        const brightness = this._backgroundActor.content.vignette
-            ? this._backgroundActor.content.brightness : 1.0;
-        this._bin.opacity =
-            this._settings.get_uint('logo-opacity') * brightness;
+    handleDragOver(source, _actor, _x, _y, _time) {
+        if (source != Main.xdndHandler)
+            return DND.DragMotionResult.CONTINUE;
+
+        if (this._xdndTimeOut != 0)
+            GLib.source_remove(this._xdndTimeOut);
+        this._xdndTimeOut = GLib.timeout_add(GLib.PRIORITY_DEFAULT, BUTTON_DND_ACTIVATION_TIMEOUT, () => {
+            this._xdndToggleOverview();
+        });
+        GLib.Source.set_name_by_id(this._xdndTimeOut, '[gnome-shell] this._xdndToggleOverview');
+
+        return DND.DragMotionResult.CONTINUE;
+    }
+    
+    vfunc_captured_event(event) {
+    if(!this.desktopscroll){
+        if (event.type() == Clutter.EventType.BUTTON_PRESS ||
+            event.type() == Clutter.EventType.TOUCH_BEGIN) {
+            if (!Main.overview.shouldToggleByCornerOrButton())
+                return Clutter.EVENT_STOP;
+        }
+        return Clutter.EVENT_PROPAGATE;}
+    }    
+
+    vfunc_event(event) {
+        if (event.type() == Clutter.EventType.TOUCH_END ||
+            event.type() == Clutter.EventType.BUTTON_RELEASE) {
+            if (Main.overview.shouldToggleByCornerOrButton())
+                Main.overview.toggle();
+        }
+        return Clutter.EVENT_PROPAGATE;
     }
 
-    _getMonitorArea() {
-        return Main.layoutManager.monitors[this._monitorIndex];
+    vfunc_key_release_event(keyEvent) {
+        let symbol = keyEvent.keyval;
+        if (symbol == Clutter.KEY_Return || symbol == Clutter.KEY_space) {
+            if (Main.overview.shouldToggleByCornerOrButton()) {
+                Main.overview.toggle();
+                return Clutter.EVENT_STOP;
+            }
+        }
+        return Clutter.EVENT_PROPAGATE;
     }
 
-    _getWidthForRelativeSize(size) {
-        let { width } = this._getMonitorArea();
-        return width * size / 100;
+    _xdndToggleOverview() {
+        let [x, y] = global.get_pointer();
+        let pickedActor = global.stage.get_actor_at_pos(Clutter.PickMode.REACTIVE, x, y);
+
+        if (pickedActor == this && Main.overview.shouldToggleByCornerOrButton())
+            Main.overview.toggle();
+
+        GLib.source_remove(this._xdndTimeOut);
+        this._xdndTimeOut = 0;
+        return GLib.SOURCE_REMOVE;
     }
 
-    _getActorScale() {
-        if (!this.has_allocation())
-            return 1;
+    _scrollEvent(actor, event) {
+        let direction;
+        switch (event.get_scroll_direction()) {
+        case Clutter.ScrollDirection.UP:
+        case Clutter.ScrollDirection.LEFT:
+            direction = Meta.MotionDirection.UP;
+            break;
+        case Clutter.ScrollDirection.DOWN:
+        case Clutter.ScrollDirection.RIGHT:
+            direction = Meta.MotionDirection.DOWN;
+            break;
+        default:
+            return Clutter.EVENT_STOP;
+        }
+        
+        let gap = event.get_time() - this._time;
+        if (gap < 100 && gap >= 0)
+            return Clutter.EVENT_STOP;
+        this._time = event.get_time();
 
-        let { width } = this._getMonitorArea();
-        return this.allocation.get_width() / width;
+        this.switchWorkspace(direction);
+        return Clutter.EVENT_PROPAGATE;
     }
 
-    _updateLogoTexture() {
-        if (this._icon)
-            this._icon.destroy();
-        this._icon = null;
+    switchWorkspace(direction) {
+        let ws = this.getWorkSpace();
 
-        let key = this._settings.settings_schema.get_key('logo-size');
-        let [, range] = key.get_range().deep_unpack();
-        let [, max] = range.deep_unpack();
-        let width = this._getWidthForRelativeSize(max);
+        let activeIndex = this.wm.get_active_workspace_index();
 
-        const resourceScale = this._bin.get_resource_scale();
-        let scaleFactor = St.ThemeContext.get_for_stage(global.stage).scale_factor;
-        this._icon = this._textureCache.load_file_async(this._logoFile, width, -1, scaleFactor, resourceScale);
-        this._icon.connect('notify::content',
-            this._updateScale.bind(this));
-        this._bin.add_actor(this._icon);
-    }
-
-    _updateScale() {
-        if (!this._icon || this._icon.width === 0)
-            return;
-
-        let size = this._settings.get_double('logo-size');
-        let width = this._getWidthForRelativeSize(size);
-        let scale = this._getActorScale() * width / this._icon.width;
-        this._bin.set_scale(scale, scale);
-    }
-
-    _updatePosition() {
-        let xAlign, yAlign;
-        const position = this._settings.get_string('logo-position');
-        if (position.endsWith('left'))
-            xAlign = Clutter.ActorAlign.START;
-        else if (position.endsWith('right'))
-            xAlign = Clutter.ActorAlign.END;
+        let newWs;
+        if (direction == Meta.MotionDirection.UP) {
+            if (activeIndex == 0 )
+                newWs = 0; //ws.length - 1;
+            else
+                newWs = activeIndex - 1;
+        } else {
+            if (activeIndex == (ws.length - 1) )
+                newWs = ws.length - 1; //0;
+            else
+                newWs = activeIndex + 1;
+        }
+        
+        if (this.desktopscroll)
+        this.actionMoveWorkspace(ws[newWs]);
         else
-            xAlign = Clutter.ActorAlign.CENTER;
-
-        if (position.startsWith('top'))
-            yAlign = Clutter.ActorAlign.START;
-        else if (position.startsWith('bottom'))
-            yAlign = Clutter.ActorAlign.END;
+        return
+        
+        if (this.popup)
+        this.switcherPopup(direction, ws[newWs]);
         else
-            yAlign = Clutter.ActorAlign.CENTER;
-
-        this._bin.set({ xAlign, yAlign });
+        return
+        
+    }
+    
+    switcherPopup(direction, newWs) {
+        if (!Main.overview.visible) {
+            if (this._workspaceSwitcherPopup == null) {
+                Main.wm._workspaceTracker.blockUpdates();
+                this._workspaceSwitcherPopup = new WorkspaceSwitcherPopup.WorkspaceSwitcherPopup();
+                this._workspaceSwitcherPopup.connect('destroy', () => {
+                    Main.wm._workspaceTracker.unblockUpdates();
+                    this._workspaceSwitcherPopup = null;
+                });
+            }
+            this._workspaceSwitcherPopup.display(newWs.index());
+        }
     }
 
-    _updateBorder() {
-        const border =
-            this._getActorScale() * this._settings.get_uint('logo-border');
-        this._bin.set({
-            margin_top: border,
-            margin_bottom: border,
-            margin_left: border,
-            margin_right: border,
-        });
+    getWorkSpace() {
+        let activeWs = this.wm.get_active_workspace();
+
+        let activeIndex = activeWs.index();
+        let ws = [];
+
+        ws[activeIndex] = activeWs;
+
+        const vertical = this.wm.layout_rows === -1;
+        for (let i = activeIndex - 1; i >= 0; i--) {
+            if (vertical)
+                ws[i] = ws[i + 1].get_neighbor(Meta.MotionDirection.UP);
+            else
+                ws[i] = ws[i + 1].get_neighbor(Meta.MotionDirection.LEFT);
+        }
+
+        for (let i = activeIndex + 1; i < this.wm.n_workspaces; i++) {
+            if (vertical)
+                ws[i] = ws[i - 1].get_neighbor(Meta.MotionDirection.DOWN);
+            else
+                ws[i] = ws[i - 1].get_neighbor(Meta.MotionDirection.RIGHT);
+        }
+
+        return ws;
     }
 
-    _updateVisibility() {
-        const { background } = this._backgroundActor.content;
-        const colorScheme = this._ifaceSettings.get_string('color-scheme');
-        const uriKey = colorScheme === 'prefer-dark'
-            ? 'picture-uri-dark'
-            : 'picture-uri';
-        const defaultUri = background._settings.get_default_value(uriKey);
-        let file = Gio.File.new_for_commandline_arg(defaultUri.deep_unpack());
-
-        let visible;
-        if (this._settings.get_boolean('logo-always-visible'))
-            visible = true;
-        else if (background._file)
-            visible = background._file.equal(file);
-        else // background == NONE
-            visible = false;
-
-        this.ease({
-            opacity: visible ? 255 : 0,
-            duration: Background.FADE_ANIMATION_TIME,
-            mode: Clutter.AnimationMode.EASE_OUT_QUAD,
-        });
-    }
-
-    vfunc_allocate(box) {
-        super.vfunc_allocate(box);
-
-        if (this._laterId)
+    actionMoveWorkspace(workspace) {
+        if (!Main.sessionMode.hasWorkspaces)
             return;
 
-        const laters = global.compositor.get_laters();
-        this._laterId = laters.add(Meta.LaterType.BEFORE_REDRAW, () => {
-            this._updateScale();
-            this._updateBorder();
+        let activeWorkspace = this.wm.get_active_workspace();
 
-            this._laterId = 0;
-            return GLib.SOURCE_REMOVE;
-        });
+        if (activeWorkspace != workspace)
+            workspace.activate(global.get_current_time());
     }
-
+    
     _onDestroy() {
-        if (this._laterId)
-            global.compositor.get_laters().remove(this._laterId);
-        this._laterId = 0;
+        if (this._showingSignal) {
+            Main.overview.disconnect(this._showingSignal);
+            this._showingSignal = null;
+        }
 
-        this._backgroundActor.layout_manager = null;
-        this._settings.run_dispose();
-        this._settings = null;
+        if (this._hidingSignal) {
+            Main.overview.disconnect(this._hidingSignal);
+            this._hidingSignal = null;
+        }
 
-        this._logoFile = null;
+        if (this._xdndTimeOut) {
+            GLib.Source.remove(this._xdndTimeOut);
+            this._xdndTimeOut = null;
+        }
+        
+        if (this.scrollEventSignal != null) {
+            this.disconnect(this.scrollEventSignal);
+            this.scrollEventSignal = null;
+        }
+        
+        if (this.text_label_ID)
+            this.settings.disconnect(this.text_label_ID);
+        if (this.activities_icon_ID)
+            this.settings.disconnect(this.activities_icon_ID);
+        if (this.text_ID)
+            this.settings.disconnect(this.text_ID);    
+        if (this.activities_icon_name_ID)
+            this.settings.disconnect(this.activities_icon_name_ID);        
+        if (this.desktopscrollID)
+            this.settings.disconnect(this.desktopscrollID);
+        if (this.popup_ID)
+            this.settings.disconnect(this.popup_ID);
+        
+        super.destroy();
     }
 });
-
 
 class Extension {
-    constructor() {
-        this._bgManagerProto = Background.BackgroundManager.prototype;
-        this._createBackgroundOrig = this._bgManagerProto._createBackgroundActor;
-    }
-
-    _reloadBackgrounds() {
-        Main.layoutManager._updateBackgrounds();
+    constructor(uuid) {
+        this._uuid = uuid;
     }
 
     enable() {
-        const { _createBackgroundOrig } = this;
-        this._bgManagerProto._createBackgroundActor = function () {
-            const backgroundActor = _createBackgroundOrig.call(this);
-            const logo_ = new BackgroundLogo(backgroundActor);
-
-            return backgroundActor;
-        };
-        this._reloadBackgrounds();
+        this._settings = ExtensionUtils.getSettings(SCHEMA_NAME);
+        Main.panel.statusArea['activities'].hide();
+        this._indicator = new LogoActivitiesIndicator(this._settings);
+        Main.panel.addToStatusArea(this._uuid, this._indicator, 0, 'left');
     }
 
     disable() {
-        this._bgManagerProto._createBackgroundActor = this._createBackgroundOrig;
-        this._reloadBackgrounds();
+        this._settings = null;
+        this._indicator.destroy();
+        this._indicator = null;
+        if(Main.sessionMode.currentMode !== 'unlock-dialog') 
+        Main.panel.statusArea['activities'].show();
     }
 }
 
-/** */
-function init() {
-    return new Extension();
+function init(meta) {
+    return new Extension(meta.uuid);
 }
