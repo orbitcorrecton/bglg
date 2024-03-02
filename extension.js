@@ -45,7 +45,8 @@ const KEY_SCROLL = 'scroll';
 var BUTTON_DND_ACTIVATION_TIMEOUT = 250;
 
 const LogoActivitiesIndicator = GObject.registerClass(
-class LogoActivitiesIndicator extends PanelMenu.Button {
+    class LogoActivitiesIndicator extends PanelMenu.Button {
+    
     _init(settings) {
         super._init(0.0, null, true);
         this.accessible_role = Atk.Role.TOGGLE_BUTTON;
@@ -54,102 +55,101 @@ class LogoActivitiesIndicator extends PanelMenu.Button {
         
         /* Translators: If there is no suitable word for "Activities"
            in your language, you can use the word for "Overview". */
+           
         
-        this.settings = settings;
-        
-        this.text_label = settings.get_boolean(KEY_LABEL);
-        this.text_label_ID = settings.connect("changed::" + KEY_LABEL, () => {
-            this.text_label = settings.get_boolean(KEY_LABEL);
-            this._set_label();
-        });
+        this.text_label = settings.get_boolean(KEY_LABEL);        
         this.activities_icon = settings.get_boolean(KEY_ICON);
-        this.activities_icon_ID = settings.connect("changed::" + KEY_ICON, () => {
-            this.activities_icon = settings.get_boolean(KEY_ICON);
-            this._set_icon();
-        });
         this.text = settings.get_string(KEY_TEXT);
-        this.text_ID = settings.connect("changed::" + KEY_TEXT, () => {
-            this.text = settings.get_string(KEY_TEXT);
-            this._set_label();
-        });
         this.activities_icon_name = settings.get_string(KEY_ICONNAME);
-        this.activities_icon_name_ID = settings.connect("changed::" + KEY_ICONNAME, () => {
-            this.activities_icon_name = settings.get_string(KEY_ICONNAME);
-            this._set_icon();
-        });
         this.desktopscroll = settings.get_boolean(KEY_SCROLL);
-        this.desktopscrollID = settings.connect("changed::" + KEY_SCROLL, () => {
-            this.desktopscroll = settings.get_boolean(KEY_SCROLL);
-        });
         this.popup = settings.get_boolean(KEY_POPUP);
-        this.popup_ID = settings.connect("changed::" + KEY_POPUP, () => {
+        
+        this._settingsID = settings.connect("changed", () => {
+            this.text_label = settings.get_boolean(KEY_LABEL);
+            this.activities_icon = settings.get_boolean(KEY_ICON);
+            this.text = settings.get_string(KEY_TEXT);
+            this.activities_icon_name = settings.get_string(KEY_ICONNAME);
+            this.desktopscroll = settings.get_boolean(KEY_SCROLL);
             this.popup = settings.get_boolean(KEY_POPUP);
+            this._set_label();
+            this._set_icon();
         });
         
         let bin = new St.Bin();
         this.add_actor(bin);
         
-        this._container = new St.BoxLayout({ style_class: 'activities-layout'});
+        this._container = new St.BoxLayout({style_class: 'activities-layout'});
         bin.set_child(this._container);
         
         this._iconBox = new St.Bin({
-            y_align: Clutter.ActorAlign.CENTER,
-        });
-        this._container.add_actor(this._iconBox);       
-        
+        y_align: Clutter.ActorAlign.CENTER,
+        });         
+        this._container.add_actor(this._iconBox);        
+          
         this._label = new St.Label({
             text: _('Activities'),
             y_align: Clutter.ActorAlign.CENTER,
-        });
+        });        
         this._container.add_actor(this._label);
         
-        this._set_icon();
+        this._set_icon();              
         this._set_label();
-
+        
         this.label_actor = this._label;
-
+        
         this._showingSignal = Main.overview.connect('showing', () => {
-            this.add_style_pseudo_class('overview');
+            this.add_style_pseudo_class('checked');
             this.add_accessible_state(Atk.StateType.CHECKED);
-        });
+        });        
+        
         this._hidingSignal = Main.overview.connect('hiding', () => {
-            this.remove_style_pseudo_class('overview');
+            this.remove_style_pseudo_class('checked');
             this.remove_accessible_state(Atk.StateType.CHECKED);
         });
-        
-        this.wm = global.workspace_manager;
-        this.scrollEventSignal = this.connect('scroll-event', this._scrollEvent.bind(this));
 
+        this._scrollEventId = this.connect('scroll-event', this.scrollEvent.bind(this));
+                
         this._xdndTimeOut = 0;
-    }
-
-    _set_icon() {     
+        this.wm = global.workspace_manager;
+        
+    }   
+   
+     _set_icon() {
+     
      if (this.activities_icon) {
         const icon = new St.Icon({
+            icon_name: 'start-here',
             style_class: 'activities-icon',
-            y_align: Clutter.ActorAlign.CENTER,
         });
         this._iconBox.set_child(icon);
+        
         icon.icon_name = this.activities_icon_name;
-        this._iconBox.visible = true;        
-        if (icon.icon_name === '')
+        
+        if(this.activities_icon_name === '')
         this._iconBox.visible = false;
+
+        this._iconBox.visible = true;
         }
         else {
         this._iconBox.visible = false;
-        }        
+        }
+        
     }
     
-    _set_label() {    
+    _set_label() {
+    
         if(this.text_label) {
         this._label.set_text(this.text);
-        this._label.visible = true;
-        if (this._label === '')
+        
+        if(this.text === '')
         this._label.visible = false;
+        
+        this._label.visible = true;
         }
         else {
         this._label.visible = false;
-        }        
+        }
+        
     }
 
     handleDragOver(source, _actor, _x, _y, _time) {
@@ -165,16 +165,6 @@ class LogoActivitiesIndicator extends PanelMenu.Button {
 
         return DND.DragMotionResult.CONTINUE;
     }
-    
-    vfunc_captured_event(event) {
-    if(!this.desktopscroll){
-        if (event.type() == Clutter.EventType.BUTTON_PRESS ||
-            event.type() == Clutter.EventType.TOUCH_BEGIN) {
-            if (!Main.overview.shouldToggleByCornerOrButton())
-                return Clutter.EVENT_STOP;
-        }
-        return Clutter.EVENT_PROPAGATE;}
-    }    
 
     vfunc_event(event) {
         if (event.type() == Clutter.EventType.TOUCH_END ||
@@ -190,9 +180,10 @@ class LogoActivitiesIndicator extends PanelMenu.Button {
         if (symbol == Clutter.KEY_Return || symbol == Clutter.KEY_space) {
             if (Main.overview.shouldToggleByCornerOrButton()) {
                 Main.overview.toggle();
-                return Clutter.EVENT_STOP;
+                return Clutter.EVENT_PROPAGATE;
             }
         }
+
         return Clutter.EVENT_PROPAGATE;
     }
 
@@ -207,8 +198,8 @@ class LogoActivitiesIndicator extends PanelMenu.Button {
         this._xdndTimeOut = 0;
         return GLib.SOURCE_REMOVE;
     }
-
-    _scrollEvent(actor, event) {
+    
+    scrollEvent(actor, event) {
         let direction;
         switch (event.get_scroll_direction()) {
         case Clutter.ScrollDirection.UP:
@@ -224,13 +215,15 @@ class LogoActivitiesIndicator extends PanelMenu.Button {
         }
         
         let gap = event.get_time() - this._time;
-        if (gap < 100 && gap >= 0)
+        if (gap < 200 && gap >= 0)
             return Clutter.EVENT_STOP;
         this._time = event.get_time();
 
         this.switchWorkspace(direction);
-        return Clutter.EVENT_PROPAGATE;
+
+        return Clutter.EVENT_STOP;
     }
+
 
     switchWorkspace(direction) {
         let ws = this.getWorkSpace();
@@ -258,7 +251,7 @@ class LogoActivitiesIndicator extends PanelMenu.Button {
         if (this.popup)
         this.switcherPopup(direction, ws[newWs]);
         else
-        return
+        return 
         
     }
     
@@ -312,7 +305,7 @@ class LogoActivitiesIndicator extends PanelMenu.Button {
             workspace.activate(global.get_current_time());
     }
     
-    _onDestroy() {
+     _onDestroy() {
         if (this._showingSignal) {
             Main.overview.disconnect(this._showingSignal);
             this._showingSignal = null;
@@ -328,23 +321,15 @@ class LogoActivitiesIndicator extends PanelMenu.Button {
             this._xdndTimeOut = null;
         }
         
-        if (this.scrollEventSignal != null) {
-            this.disconnect(this.scrollEventSignal);
-            this.scrollEventSignal = null;
+        if (this._scrollEventId != null) {
+            this.disconnect(this._scrollEventId);
+            this._scrollEventId = null;
         }
         
-        if (this.text_label_ID)
-            this.settings.disconnect(this.text_label_ID);
-        if (this.activities_icon_ID)
-            this.settings.disconnect(this.activities_icon_ID);
-        if (this.text_ID)
-            this.settings.disconnect(this.text_ID);    
-        if (this.activities_icon_name_ID)
-            this.settings.disconnect(this.activities_icon_name_ID);        
-        if (this.desktopscrollID)
-            this.settings.disconnect(this.desktopscrollID);
-        if (this.popup_ID)
-            this.settings.disconnect(this.popup_ID);
+        if (this._settingsID) {
+        settings.disconnect(this._settingID);
+        this._settingsID = null;
+        }        
         
         super.destroy();
     }
